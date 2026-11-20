@@ -113,6 +113,23 @@ if isempty(eegFolder)
 end
 files=dir(fullfile(eegFolder,'D*_B*_T*_ICApruned.set'));
 assert(~isempty(files),'No matching .set files in selected folder: %s',eegFolder);
+% COHORT RULE: exclude ALL recordings from Dyad 9 BEFORE pilot, sweeps,
+% full-cohort robustness, PLV, spectral comparisons, and paper figures.
+allInputFiles=files;
+fileDyads=nan(numel(files),1);
+for fi=1:numel(files)
+    tk=regexp(files(fi).name,'^D(\d+)_B\d+_T\d+_ICApruned\.set$','tokens','once','ignorecase');
+    assert(~isempty(tk),'Unrecognized EEG filename: %s',files(fi).name);
+    fileDyads(fi)=str2double(tk{1});
+end
+files=files(fileDyads~=9);
+assert(~isempty(files),'No EEG files remain after excluding Dyad 9.');
+assert(~any(fileDyads(fileDyads~=9)==9),'Dyad 9 exclusion failed.');
+fprintf('COHORT: excluded Dyad 9 (%d recordings); retained %d recordings from %d dyads.\n', ...
+    sum(fileDyads==9),numel(files),numel(unique(fileDyads(fileDyads~=9))));
+assert(any(fileDyads==9),'Expected Dyad 9 files were not found; verify input cohort.');
+assert(numel(unique(fileDyads(fileDyads~=9)))==8, ...
+    'Expected 8 retained dyads after excluding Dyad 9.');
 [~,ord]=sort({files.name}); files=files(ord);
 RawEEGFiles=files; % IMMUTABLE source list: downstream Frontal14 reuses variable 'files' for XLSX
 fprintf('FOUND EEG FOLDER: %s\nRECORDINGS: %d\n',eegFolder,numel(files));
@@ -174,16 +191,18 @@ P.PLVFilterOrder=2; % butter(...,'bandpass'); forward-backward filtfilt
 % Additional conventional EEG connectivity controls from the earlier benchmark.
 % Numerical spectral controls retained (no supplementary figures): magnitude-squared coherence,
 % absolute imaginary coherence, and debiased wPLI (dwPLI), all in 8-30 Hz.
-% manuscript 9.6-s / 75%%-overlap geometry, 2-s Hann-tapered segments, 50%%
+% PRIMARY 6.4-s / 50%%-overlap geometry, 2-s Hann-tapered segments, 50%%
 % segment overlap, and require at least five segments. dwPLI is NOT clamped;
 % finite-sample debiased estimates may be negative.
 P.RunSpectralComparators=true;
 P.SpectralBandHz=[8 30];
-P.SpectralWindowSeconds=9.6;
-P.SpectralWindowOverlap=.75;
+P.SpectralWindowSeconds=P.WindowSeconds;
+P.SpectralWindowOverlap=P.Overlap;
 P.SpectralSegmentSec=2;
 P.SpectralSegmentOverlap=.50;
 P.MinSpectralSegments=5;
+assert(P.SpectralWindowSeconds==P.WindowSeconds && P.SpectralWindowOverlap==P.Overlap, ...
+    'Spectral and primary CS window geometries must match.');
 
 
 stamp=datestr(now,'yyyymmdd_HHMMSS'); OUT=fullfile(root,['Music2_CORRECTED_MDEA_' stamp]);
@@ -195,7 +214,10 @@ mkdir(fullfile(figDir,'MAIN','VECTOR_PDF'));
 matDir=fullfile(OUT,'MAT_TRAJECTORIES'); mkdir(matDir);
 xlsDir=fullfile(OUT,'DELTA_XLSX_FOR_CS'); mkdir(xlsDir);
 diary(fullfile(OUT,'RUN_LOG.txt'));diary on;
-fprintf('EEG: %s\nOUT: %s\nFiles: %d\n',eegFolder,OUT,numel(files));
+fprintf('EEG: %s\nOUT: %s\nFiles: %d\nCOHORT: Dyad 9 excluded; 8 dyads / 16 independent musicians expected.\n',eegFolder,OUT,numel(files));
+fidC=fopen(fullfile(OUT,'COHORT_EXCLUSION_AUDIT.txt'),'w');
+fprintf(fidC,'Dyad 9 excluded BEFORE all main-pipeline analyses.\nInput files: %d\nExcluded Dyad 9 files: %d\nRetained files: %d\nRetained dyads: %s\n',numel(allInputFiles),sum(fileDyads==9),numel(files),mat2str(unique(fileDyads(fileDyads~=9))'));
+fclose(fidC);
 fid=fopen(fullfile(OUT,'WHERE_OUTPUT_IS_SAVED.txt'),'w');
 fprintf(fid,'EEG source: %s\nOutput folder: %s\n',eegFolder,OUT);fclose(fid);
 fprintf('Corrected MDEAcorrected.m is the ONLY scaling estimator; window min-max normalization is inside MDEA.\n');
@@ -293,7 +315,7 @@ fprintf(fid,'All PRIMARY batch calls: MDEAcorrected(EEGwindow,%.2f,1,0.2,0.8,0).
 fprintf(fid,'Corrected MDEA recommends ~30000 samples; geometry windows may be shorter.\n');
 fclose(fid);
 
-%% MAIN PAPER ANALYSIS: NINE EQUAL-STATUS MDEA GEOMETRIES
+%% MAIN PAPER ANALYSIS: PRIMARY GEOMETRY PLUS NINE-GEOMETRY ROBUSTNESS
 % Primary paper figures/inference use 6.4 s / 50%; nine geometries retained as sensitivity.
 mainPDF=fullfile(figDir,'MAIN','MAIN_FIGURES.pdf');
 if P.RunFullCohortRobustness
@@ -566,8 +588,7 @@ fprintf(fid,'An absent A edge in an individual network can reflect missing/inval
 fprintf(fid,'coverage; inspect ChannelCoverage before attributing the reason.\n\n');
 fprintf(fid,'Primary comparisons are each musical task versus Rest; no direct task-discrimination tests are reported.\n');
 fprintf(fid,'WeightedNetworkT0 and M1M2_Similarity_T0; do not use raw file count.\n');
-fprintf(fid,'One musician appears in two dyads; dyad and participant-context\n');
-fprintf(fid,'observations should not automatically be described as independent people.\n\n');
+fprintf(fid,'Dyad 9 excluded before analysis; retained 8 dyads contain 16 independent musicians.\n\n');
 fprintf(fid,'Statistical interpretation: complete-case Friedman omnibus and paired\n');
 fprintf(fid,'Rest-referenced contrasts answer different questions. Report both.\n');
 fprintf(fid,'FDR for edges is across six task contrasts within each connection,\n');
@@ -5419,8 +5440,8 @@ parfor fi=1:n
     end
 
     % Supplementary conventional spectral-connectivity controls from the
-    % earlier benchmark.  They are intentionally evaluated only at the old
-    % benchmark geometry (9.6 s / 75% overlap) so the method is unchanged.
+    % primary manuscript geometry (6.4 s / 50% overlap), matching CS and PLV.
+    % The spectral estimator itself (2-s segments, 50% segment overlap) is unchanged.
     if P.RunSpectralComparators && ...
        abs(ws-P.SpectralWindowSeconds)<1e-9 && abs(ov-P.SpectralWindowOverlap)<1e-12
      for e0=1:nEdges
@@ -5585,7 +5606,7 @@ if P.RunPLVComparison
 end
 
 % Long-format supplementary spectral connectivity table.  Only the preserved
-% 9.6-s/75%-overlap benchmark geometry has finite values by design.
+% 6.4-s/50%-overlap PRIMARY geometry has finite values by design.
 SPEC=table();
 if P.RunSpectralComparators
  for fi=1:n
@@ -5642,7 +5663,7 @@ if P.RunPLVComparison && ~isempty(PLV)
 end
 
 % Supplementary 8-30 Hz coherence / imaginary coherence / debiased-wPLI
-% benchmarks using the exact old 9.6-s/75%-overlap spectral recipe.
+% benchmarks at the same PRIMARY 6.4-s/50%-overlap geometry as CS.
 Cspectral=table();
 if P.RunSpectralComparators && ~isempty(SPEC)
  Cspectral=music2_spectral_task_contrasts(SPEC,edgeNames,P);
@@ -6392,7 +6413,7 @@ for gi=1:size(geom,1)
    iy=strcat(string(aa.Dyad),'_',string(aa.Musician))==contexts(ci)&aa.Edge==edgeNames{e};
    if sum(ix)==1&&sum(iy)==1,a=rr.AbsCS(ix);b=aa.AbsCS(iy);if isfinite(a)&&isfinite(b),d(ci,e)=b-a;end,end
   end,end
-  valid=all(isfinite(d),2);d=d(valid,:);ids=ids(valid);dup=(ids=="2_2"|ids=="9_1");if sum(dup)==2,d=[d(~dup,:);mean(d(dup,:),1)];end
+  valid=all(isfinite(d),2);d=d(valid,:);ids=ids(valid);assert(~any(startsWith(ids,"9_")),'Dyad 9 leaked into omnibus.');
   n=size(d,1);effect=NaN;stat=NaN;p=NaN;
   if n>=5&&any(d(:)~=0),effect=norm(mean(d,1));stat=effect^2;rs=RandStream('mt19937ar','Seed',P.OmnibusSeed+7000+gi*101+task);null=nan(P.OmnibusPermutations,1);
    for b=1:P.OmnibusPermutations,sgn=2*(rand(rs,n,1)>.5)-1;null(b)=sum(mean(d.*sgn,1).^2);end;p=(1+sum(null>=stat))/(P.OmnibusPermutations+1);end
@@ -6420,7 +6441,7 @@ end
 function OM=music2_network_omnibus(R,geom,edgeNames,P)
 % Paired multivariate task-vs-Rest test on ten-edge signed-CS fingerprint.
 % Unit of inference is the unique musician, NOT the overlapping delta window.
-% D02_M2 and D09_M1 are the same musician; average their paired contrasts.
+% Dyad 9 is excluded at file discovery; remaining musicians are independent.
 % Complete ten-edge networks only: fixed dimension avoids changing edge set.
 OM=table();
 for gi=1:size(geom,1)
@@ -6442,11 +6463,7 @@ for gi=1:size(geom,1)
    end
   end
   valid=all(isfinite(d),2);d=d(valid,:);ids=ids(valid);
-  % Replace two independently recorded contexts with one musician's mean.
-  dup=(ids=="2_2" | ids=="9_1");
-  if sum(dup)==2
-   dd=mean(d(dup,:),1);d=[d(~dup,:);dd];
-  end
+  assert(~any(startsWith(ids,"9_")),'Dyad 9 leaked into omnibus.');
   n=size(d,1);effect=NaN;stat=NaN;p=NaN;
   if n>=5 && any(d(:)~=0)
    effect=norm(mean(d,1));stat=effect^2;
@@ -8855,8 +8872,7 @@ end
 function final_statistical_validation(M)
 % Rest-referenced statistical audit from saved recording-level signed CS.
 % No direct musical-task-versus-musical-task inference is performed.
-% Does not rerun MDEA. Uses verified repeated-person identity internally.
-% Dyad 2/Musician 2 and Dyad 9/Musician 1 are the same person.
+% Does not rerun MDEA. Dyad 9 has been excluded upstream.
 D=fullfile(M,'FULL_COHORT_ROBUSTNESS');
 R=readtable(fullfile(D,'ALL_EDGES_ALL_GEOMETRIES.csv'));
 C=readtable(fullfile(D,'SIGNED_CS_MATCHED_TASK_VS_REST_BY_GEOMETRY.csv'));
@@ -8864,19 +8880,15 @@ V=fullfile(M,'UNIFIED_PUBLICATION','STATISTICAL_VALIDATION');
 if ~isfolder(V),mkdir(V);end
 C.GlobalBH=final_bh(C.P); C.GlobalBY=min(1,C.GlobalBH*sum(1./(1:sum(isfinite(C.P)))));
 writetable(C,fullfile(V,'GLOBAL_540_CONTRAST_FDR.csv'));
-% VERIFIED IDENTITIES: dyad 2 musician 2 == dyad 9 musician 1.
-% Derive the complete 18-context identity table from the observed records;
-% do not require a separately maintained CSV.
+% VERIFIED COHORT: Dyad 9 excluded, with 8 dyads and 16 distinct musicians.
+assert(~any(R.Dyad==9),'Dyad 9 leaked into statistical validation.');
 contexts=unique(R(:,{'Dyad','Musician'}),'rows');
-assert(height(contexts)==18,'Expected exactly 18 dyad/musician contexts.');
+assert(height(contexts)==16,'Expected exactly 16 musician contexts after Dyad 9 exclusion.');
+assert(numel(unique(contexts.Dyad))==8,'Expected exactly 8 dyads.');
 K=contexts;
 K.Context=strcat(string(K.Dyad),'_',string(K.Musician));
 K.PersonID=strcat("P_D",string(K.Dyad),"_M",string(K.Musician));
-repeatA=K.Context=="2_2"; repeatB=K.Context=="9_1";
-assert(nnz(repeatA)==1 && nnz(repeatB)==1, ...
- 'Expected repeated contexts Dyad 2/Musician 2 and Dyad 9/Musician 1.');
-K.PersonID(repeatA|repeatB)="P_REPEATED_HORN";
-assert(numel(unique(K.PersonID))==17,'Expected exactly 17 unique people.');
+assert(numel(unique(K.PersonID))==16,'Expected exactly 16 independent musicians.');
 writetable(K(:,{'Dyad','Musician','PersonID'}), ...
  fullfile(V,'MUSICIAN_ID_MAP_USED.csv'));
 missingFlag=fullfile(V,'REQUIRES_PERSON_ID_MAPPING.txt');
@@ -8885,7 +8897,7 @@ R.Context=strcat(string(R.Dyad),'_',string(R.Musician));
 [tf,loc]=ismember(R.Context,K.Context);
 assert(all(tf),'Missing musician identity mapping for one or more contexts.');
 R.PersonID=K.PersonID(loc);
-assert(numel(unique(R.PersonID))==17,'Participant count mismatch.');
+assert(numel(unique(R.PersonID))==16,'Participant count mismatch.');
 stripes=.18; taskNames={'Coordination','Call-response','Familiar','Unfamiliar','Improvisation','Listening'};
 T=table();
 rng(260924,'twister'); nBoot=5000;
@@ -8897,7 +8909,7 @@ for si=1:numel(stripes)
    'FULL_COHORT_ROBUSTNESS','ALL_EDGES_ALL_GEOMETRIES.csv');
   X=readtable(d2);X.Context=strcat(string(X.Dyad),'_',string(X.Musician));
   [ok,ii]=ismember(X.Context,K.Context);assert(all(ok));X.PersonID=K.PersonID(ii);
-  assert(numel(unique(X.PersonID))==17,'Stripe analysis does not contain all 17 musicians.');
+  assert(numel(unique(X.PersonID))==16,'Stripe analysis does not contain all 16 musicians.');
  end
  X=X(abs(X.WindowSeconds-6.4)<1e-9 & abs(X.Overlap-.50)<1e-12,:);
  assert(~isempty(X),'Missing primary 6.4-second / 50%% geometry');
@@ -8963,8 +8975,8 @@ final_ci_figure(T,V);
 primary_geometry_inference_figure(T,V,M);
 
 fid=fopen(fullfile(V,'STATISTICAL_VALIDATION_README.txt'),'w');
-fprintf(fid,'17 unique musicians; 18 contexts. Repeated: D02_M2 and D09_M1.\n');
-fprintf(fid,'Bootstrap: 5000 musician-cluster resamples per stripe and task.\n');
+fprintf(fid,'Dyad 9 excluded entirely before processing; 8 dyads and 16 independent musicians.\n');
+fprintf(fid,'Bootstrap: 5000 independent-musician resamples per stripe and task.\n');
 fprintf(fid,'PRIMARY 6.4s/50%%: 10000 musician-level sign flips for raw two-sided task p-values; Holm-Bonferroni adjustment across six Rest-referenced tasks.\n');
 fprintf(fid,'All 540 edge/task/geometry tests are exploratory robustness diagnostics, not primary inferential claims.\n');
 fprintf(fid,['Cluster bootstrap CIs are pointwise, not simultaneous.\n', ...
