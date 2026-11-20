@@ -1,10 +1,11 @@
-%% Music EEG: supplementary analysis
+%% Music EEG: supplementary analysis — EXCLUDE DYAD 9; 8 dyads / 16 musicians
 % Run this script with the required EEG files and MATLAB dependencies available.
 % Dependencies: MDEAcorrected.m, read_set_file.m,
 % CS_reliability_test_scaling_series_Strength.m, Signal Processing Toolbox.
 % Generates S01-S06, including matched stripe-width analyses.
 % S03 uses a fitting interval of [2,20] and common x-axis limits [1,100].
-% Results are written to a timestamped folder under Downloads.
+% ONE output root under Downloads; V15 and statistical outputs are nested subfolders.
+% To reuse a completed matched-cohort run, set existingResultsFolder below.
 %
 % Optional: set existingResultsFolder to a completed analysis folder with
 % STRIPE_SIZE_SENSITIVITY outputs to reuse its matched-stripe results.
@@ -15,31 +16,32 @@ if isempty(existingResultsFolder)
 else
     M = char(existingResultsFolder);
     assert(isfolder(M), 'Analysis folder not found.');
+    assert(isfile(fullfile(M,'COHORT_EXCLUSION_AUDIT.txt')), ...
+        'Cannot reuse results without verified Dyad 9 exclusion audit. Recompute supplementary results.');
     assert(isfile(fullfile(M,'STRIPE_SIZE_SENSITIVITY','STRIPE_MATCHED_TASK_VS_REST.csv')), ...
         'Matched stripe-width results not found in the selected folder.');
     P = struct('StripeWidth',0.18);
     unified_matched_stripe_figures(M,P);
 end
 
-homeFolder = getenv('USERPROFILE');
-if isempty(homeFolder), homeFolder = getenv('HOME'); end
-rootFolder = fullfile(homeFolder,'Downloads');
-if ~isfolder(rootFolder), rootFolder = fullfile(homeFolder,'OneDrive','Downloads'); end
-assert(isfolder(rootFolder), 'Downloads folder not found.');
-previousFolders = dir(fullfile(rootFolder,'MUSIC_STRIPE_SUPPLEMENT_V15_PATCHED_*'));
-previousNames = string({previousFolders.name});
-unifiedV15Diagnostics();
-currentFolders = dir(fullfile(rootFolder,'MUSIC_STRIPE_SUPPLEMENT_V15_PATCHED_*'));
-newFolders = currentFolders(~ismember(string({currentFolders.name}),previousNames));
-assert(~isempty(newFolders), 'Supplementary diagnostics output folder not found.');
-[~,newestIndex] = max([newFolders.datenum]);
-S = fullfile(newFolders(newestIndex).folder,newFolders(newestIndex).name);
+% All outputs live under ONE timestamped root folder (M).
+% The independent V15 estimator/renewal diagnostics have their own subfolder.
+S=fullfile(M,'V15_ESTIMATOR_RENEWAL_DIAGNOSTICS');
+if ~isfolder(S),mkdir(S);end
+unifiedV15Diagnostics(S);
+assert(isfile(fullfile(S,'COHORT_EXCLUSION_AUDIT.txt')),'V15 cohort audit missing.');
+% Statistical analyses reuse saved recording-level signed CS, never rerun MDEA.
+final_statistical_validation(M);
+music2_dyad_cluster_sensitivity(M);
 unifiedAssemble(M,S);
-fprintf('Supplementary figures complete: %s\n',fullfile(M,'UNIFIED_PUBLICATION','SUPPLEMENTARY'));
+fprintf('\nONE supplementary output root: %s\n',M);
+fprintf('Publication figures: %s\n',fullfile(M,'UNIFIED_PUBLICATION','SUPPLEMENTARY'));
+fprintf('Dyad-level inference: %s\n',fullfile(M,'UNIFIED_PUBLICATION','STATISTICAL_VALIDATION','DYAD_CLUSTER_SENSITIVITY'));
 
 %% Local functions
 
 function unifiedAssemble(M,S)
+assert(isfile(fullfile(M,'COHORT_EXCLUSION_AUDIT.txt')) && isfile(fullfile(S,'COHORT_EXCLUSION_AUDIT.txt')), 'Missing cohort audit in main or V15 source.');
 D=fullfile(M,'UNIFIED_PUBLICATION');if ~isfolder(D),mkdir(D);end
 F=fullfile(D,'SUPPLEMENTARY');if ~isfolder(F),mkdir(F);end
 orig=fullfile(S,'FINAL_SUPPLEMENTARY_FIGURES');
@@ -62,7 +64,8 @@ for k=1:6
  exportgraphics(f,pdf,'ContentType','image','Resolution',600,'Append',k>1);close(f);
 end
 fid=fopen(fullfile(D,'RUN_LOCATIONS_AND_METHODS.txt'),'w');
-fprintf(fid,'Primary and matched stripe sweep: %s\nV15 estimator/renewal: %s\n',M,S);
+fprintf(fid,'Single supplementary output root: %s\nV15 estimator/renewal subfolder: %s\n',M,S);
+fprintf(fid,'Cohort: Dyad 9 excluded in BOTH sources; eight dyads / sixteen independent musicians.\n');
 fprintf(fid,'Main: 6.4 seconds / 50%% overlap, local per-window normalization, stripe 0.18.\n');
 fprintf(fid,'All nine geometries remain secondary sensitivity; matched stripes 0.15, 0.18, 0.20.\n');
 fprintf(fid,'S04 uses identical primary CS analysis and all nine geometries.\n');
@@ -78,7 +81,7 @@ if nargin<1, purpose="main"; end
 % read_set_file.m and CS_reliability_test_scaling_series_Strength.m.
 % Primary scaling estimates use MDEAcorrected(EEGwindow,0.18,1,0.2,0.8,0).
 % CENTRAL/PRIMARY SZ=0.18 is used for the main CS results.
-% Stripe-size selection and renewal validation are handled by the separate supplementary pipeline.
+% Stripe-size diagnostics are independent; main stripe width remains fixed at 0.18 unless explicitly updated after reviewing diagnostics.
 % SZ=0.18 is justified from estimator diagnostics, not from task significance counts;
 % report the full sensitivity range and do not describe 0.18 as a unique mathematical optimum.
 % Only illustrative pilot MDEA figures use PLOT=1.
@@ -141,6 +144,18 @@ if isempty(eegFolder)
 end
 files=dir(fullfile(eegFolder,'D*_B*_T*_ICApruned.set'));
 assert(~isempty(files),'No matching .set files in selected folder: %s',eegFolder);
+% SHARED COHORT WITH MAIN: Dyad 9 is excluded BEFORE any MDEA or CS work.
+allInputFiles=files;
+fileDyads=nan(numel(files),1);
+for fi=1:numel(files)
+ tk=regexp(files(fi).name,'^D(\d+)_B\d+_T\d+_ICApruned\.set$','tokens','once','ignorecase');
+ assert(~isempty(tk),'Unrecognized EEG filename: %s',files(fi).name);
+ fileDyads(fi)=str2double(tk{1});
+end
+assert(any(fileDyads==9),'Expected Dyad 9 input files; check EEG folder.');
+files=files(fileDyads~=9);
+assert(numel(unique(fileDyads(fileDyads~=9)))==8,'Expected eight retained dyads.');
+fprintf('SUPPLEMENT COHORT: excluded Dyad 9 (%d files), retained %d files, eight dyads.\n',sum(fileDyads==9),numel(files));
 [~,ord]=sort({files.name}); files=files(ord);
 RawEEGFiles=files; % IMMUTABLE source list: downstream Frontal14 reuses variable 'files' for XLSX
 fprintf('FOUND EEG FOLDER: %s\nRECORDINGS: %d\n',eegFolder,numel(files));
@@ -215,7 +230,11 @@ P.MinSpectralSegments=5;
 
 
 stamp=datestr(now,'yyyymmdd_HHMMSS'); OUT=fullfile(root,['Music2_CORRECTED_MDEA_' stamp]);
-mkdir(OUT); pilotDir=fullfile(OUT,'PILOT'); mkdir(pilotDir);
+mkdir(OUT);
+fidC=fopen(fullfile(OUT,'COHORT_EXCLUSION_AUDIT.txt'),'w');
+fprintf(fidC,'Dyad 9 excluded from supplementary main/stripe pipeline before all computations.\nInput files: %d\nExcluded: %d\nRetained: %d\nRetained dyads: %s\n',numel(allInputFiles),sum(fileDyads==9),numel(files),mat2str(unique(fileDyads(fileDyads~=9))'));
+fclose(fidC);
+pilotDir=fullfile(OUT,'PILOT'); mkdir(pilotDir);
 figDir=fullfile(OUT,'FIGURES'); mkdir(figDir);
 mkdir(fullfile(figDir,'MAIN'));
 mkdir(fullfile(figDir,'MAIN','JPG_600DPI'));
@@ -594,8 +613,8 @@ fprintf(fid,'An absent A edge in an individual network can reflect missing/inval
 fprintf(fid,'coverage; inspect ChannelCoverage before attributing the reason.\n\n');
 fprintf(fid,'Primary comparisons are each musical task versus Rest; no direct task-discrimination tests are reported.\n');
 fprintf(fid,'WeightedNetworkT0 and M1M2_Similarity_T0; do not use raw file count.\n');
-fprintf(fid,'One musician appears in two dyads; dyad and participant-context\n');
-fprintf(fid,'observations should not automatically be described as independent people.\n\n');
+fprintf(fid,'Dyad 9 excluded: 8 dyads, 16 independent musician contexts.\n');
+fprintf(fid,'All remaining musician contexts are independent under the verified cohort mapping.\n\n');
 fprintf(fid,'Statistical interpretation: complete-case Friedman omnibus and paired\n');
 fprintf(fid,'Rest-referenced contrasts answer different questions. Report both.\n');
 fprintf(fid,'FDR for edges is across six task contrasts within each connection,\n');
@@ -4682,7 +4701,7 @@ for j=1:height(Ee)
    'VariableNames',{'Sensitivity','Family','Metric','Task','NPaired','MeanDelta','MedianDelta','CI95_Low','CI95_High','P_Wilcoxon','Q_WithinFamily','RankBiserial','SignificantFDR'})]; %#ok<AGROW>
 end
 status=sprintf(['RUN: %s and %s were mapped to one unique participant before inference. ' ...
- 'This yields participant-independent paired tests (maximum N=17) while retaining the prespecified within-family BH-FDR.'],ids{1},ids{2});
+ 'This is a historical sensitivity routine; primary analyses use 16 independent musicians after excluding Dyad 9.'],ids{1},ids{2});
 end
 
 function [T,status] = frontal14_repeated_musician_dyad_sensitivity(R,affectedDyads,t0,tasks)
@@ -6420,7 +6439,7 @@ for gi=1:size(geom,1)
    iy=strcat(string(aa.Dyad),'_',string(aa.Musician))==contexts(ci)&aa.Edge==edgeNames{e};
    if sum(ix)==1&&sum(iy)==1,a=rr.AbsCS(ix);b=aa.AbsCS(iy);if isfinite(a)&&isfinite(b),d(ci,e)=b-a;end,end
   end,end
-  valid=all(isfinite(d),2);d=d(valid,:);ids=ids(valid);dup=(ids=="2_2"|ids=="9_1");if sum(dup)==2,d=[d(~dup,:);mean(d(dup,:),1)];end
+  valid=all(isfinite(d),2);d=d(valid,:);ids=ids(valid);assert(~any(startsWith(ids,"9_")),'Dyad 9 leaked into omnibus.');
   n=size(d,1);effect=NaN;stat=NaN;p=NaN;
   if n>=5&&any(d(:)~=0),effect=norm(mean(d,1));stat=effect^2;rs=RandStream('mt19937ar','Seed',P.OmnibusSeed+7000+gi*101+task);null=nan(P.OmnibusPermutations,1);
    for b=1:P.OmnibusPermutations,sgn=2*(rand(rs,n,1)>.5)-1;null(b)=sum(mean(d.*sgn,1).^2);end;p=(1+sum(null>=stat))/(P.OmnibusPermutations+1);end
@@ -6470,11 +6489,7 @@ for gi=1:size(geom,1)
    end
   end
   valid=all(isfinite(d),2);d=d(valid,:);ids=ids(valid);
-  % Replace two independently recorded contexts with one musician's mean.
-  dup=(ids=="2_2" | ids=="9_1");
-  if sum(dup)==2
-   dd=mean(d(dup,:),1);d=[d(~dup,:);dd];
-  end
+  assert(~any(startsWith(ids,"9_")),'Dyad 9 leaked into omnibus.');
   n=size(d,1);effect=NaN;stat=NaN;p=NaN;
   if n>=5 && any(d(:)~=0)
    effect=norm(mean(d,1));stat=effect^2;
@@ -6499,7 +6514,7 @@ end
 end
 
 function music2_stripe_sensitivity(files,P,OUT,suppPDF)
-% Full-cohort, supplementary-only stripe sensitivity at 6.4s/75% overlap.
+% Full-cohort stripe sensitivity: all nine geometries; primary comparison is 6.4 s / 50% overlap.
 % Identical raw files, montage, tests, and windows; ONLY StripeWidth changes.
 % 0.18 is the central/primary stripe and is taken from the main run.
 % The extended 0.05-0.30 grid diagnoses estimator behavior without using
@@ -6514,6 +6529,9 @@ suppPDF=char(suppPDF);
 [~,~,suppExt]=fileparts(suppPDF);
 if isempty(suppExt), suppPDF=[suppPDF '.pdf']; end
 
+assert(abs(P.StripeSweepWindowSeconds-P.WindowSeconds)<1e-12 && ...
+    abs(P.StripeSweepOverlap-P.Overlap)<1e-12, ...
+    'Matched stripe geometry must equal the main primary geometry.');
 stripes=P.StripeSweep(:)'; assert(any(abs(stripes-P.StripeWidth)<1e-12), ...
     'Primary stripe must occur in sensitivity grid.');
 assert(all(stripes>0 & stripes<1) && numel(unique(stripes))==numel(stripes), ...
@@ -6716,7 +6734,8 @@ for t=1:6
       P.StripeSweepOverlap,t,edgeNames);
   title(ax,sprintf('stripe = %.3g',stripes(k)),'FontSize',12);
  end
- title(tl,sprintf('SUPPLEMENT: %s - Rest | stripe sensitivity at 6.4s / 75%%',labels{t}), ...
+ title(tl,sprintf('SUPPLEMENT: %s - Rest | stripe sensitivity at %.1fs / %.0f%%', ...
+    labels{t},P.StripeSweepWindowSeconds,100*P.StripeSweepOverlap), ...
     'FontSize',16,'FontWeight','bold');
  annotation(f,'textbox',[.08 .002 .84 .04], ...
     'String','SOLID: within-edge FDR q<0.05; DASHED: nonsignificant; pale dotted: unavailable. Label: mean change in |CS|.', ...
@@ -6725,7 +6744,12 @@ for t=1:6
 end
 end
 fid=fopen(fullfile(D,'STRIPE_SWEEP_README.txt'),'w');
-fprintf(fid,'Supplement-only stripe sensitivity: widths %s; 6.4 s / 75%% overlap.\n',mat2str(stripes));
+fprintf(fid,'Supplement-only stripe sensitivity: widths %s; primary matched geometry %.1f s / %.0f%% overlap.\n', ...
+    mat2str(stripes),P.StripeSweepWindowSeconds,100*P.StripeSweepOverlap);
+fprintf(fid,'Full matched-stripe numerical tables contain all nine geometries: windows %s s, overlaps %s.\n', ...
+    mat2str(P.SweepWindowSeconds),mat2str(P.SweepOverlaps));
+fprintf(fid,'Primary geometry is %.1f s / %.0f%% overlap; 75%% overlap is a separate sensitivity geometry, not the primary.\n', ...
+    P.StripeSweepWindowSeconds,100*P.StripeSweepOverlap);
 fprintf(fid,'Same files, five groups, MDEAcorrected and paired task statistics. Central stripe .18 reused from main run.\n');
 fprintf(fid,'No significance-driven parameter selection. S in heatmap = BH-FDR within six tasks per edge and stripe.\n');
 fprintf(fid,'PRIMARY ANALYSIS uses stripe 0.18, selected as the central operating point from estimator diagnostics rather than task significance.\n');
@@ -7153,7 +7177,7 @@ fprintf(fid,['MATCHED STRIPE SENSITIVITY\n', ...
  'Do not claim significance/robustness from a descriptive curve alone.\n']);fclose(fid);
 end
 
-function unifiedV15Diagnostics()
+function unifiedV15Diagnostics(OUT)
 % No panel-specific interval adjustment; insufficient support is shown as unavailable.
 % S01/S03 use concise bold panel labels, matching layout conventions.
 % RUN_MUSIC_STRIPE_SUPPLEMENT_V15_FINAL.m
@@ -7218,9 +7242,21 @@ for j=1:numel(roots)
  if ~isempty(files),break;end
 end
 assert(~isempty(files),'EEG .set files not found');
+% Same cohort exclusion for independent V15 estimator/renewal diagnostics.
+allV15Files=files; v15Dyads=nan(numel(files),1);
+for fi=1:numel(files)
+ tk=regexp(files(fi).name,'^D(\d+)_B\d+_T\d+_ICApruned\.set$','tokens','once','ignorecase');
+ assert(~isempty(tk),'Unexpected V15 EEG filename: %s',files(fi).name);
+ v15Dyads(fi)=str2double(tk{1});
+end
+assert(any(v15Dyads==9),'Expected Dyad 9 source recordings in V15 input.');
+files=files(v15Dyads~=9);
+assert(numel(unique(v15Dyads(v15Dyads~=9)))==8,'V15 cohort must retain eight dyads.');
+fprintf('V15 COHORT: excluded Dyad 9 (%d recordings); retained %d.\n',sum(v15Dyads==9),numel(files));
 [~,ii]=sort({files.name});files=files(ii); nF=numel(files);nS=numel(P.Stripes);
-outbase=fullfile(home,'Downloads');if ~isfolder(outbase),outbase=pwd;end
-OUT=fullfile(outbase,['MUSIC_STRIPE_SUPPLEMENT_V15_PATCHED_' datestr(now,'yyyymmdd_HHMMSS')]);mkdir(OUT);
+assert(isfolder(OUT),'V15 destination must already exist under the single output root.');
+fidC=fopen(fullfile(OUT,'COHORT_EXCLUSION_AUDIT.txt'),'w');
+fprintf(fidC,'Dyad 9 excluded from V15 stripe diagnostics before processing.\nInput files: %d\nExcluded: %d\nRetained: %d\nRetained dyads: %s\n',numel(allV15Files),sum(v15Dyads==9),numel(files),mat2str(unique(v15Dyads(v15Dyads~=9))'));fclose(fidC);
 fprintf('Found %d recordings, %d stripe widths.\n',nF,nS);
 %% Visual preflight of the EXACT MDEA and mu estimators used in batch.
 % No ginput. Figures stay open while user reviews. Preflight never silently accepts.
@@ -8930,8 +8966,7 @@ end
 function final_statistical_validation(M)
 % Rest-referenced statistical audit from saved recording-level signed CS.
 % No direct musical-task-versus-musical-task inference is performed.
-% Does not rerun MDEA. Uses verified repeated-person identity internally.
-% Dyad 2/Musician 2 and Dyad 9/Musician 1 are the same person.
+% Does not rerun MDEA. Dyad 9 has been excluded upstream.
 D=fullfile(M,'FULL_COHORT_ROBUSTNESS');
 R=readtable(fullfile(D,'ALL_EDGES_ALL_GEOMETRIES.csv'));
 C=readtable(fullfile(D,'SIGNED_CS_MATCHED_TASK_VS_REST_BY_GEOMETRY.csv'));
@@ -8939,19 +8974,15 @@ V=fullfile(M,'UNIFIED_PUBLICATION','STATISTICAL_VALIDATION');
 if ~isfolder(V),mkdir(V);end
 C.GlobalBH=final_bh(C.P); C.GlobalBY=min(1,C.GlobalBH*sum(1./(1:sum(isfinite(C.P)))));
 writetable(C,fullfile(V,'GLOBAL_540_CONTRAST_FDR.csv'));
-% VERIFIED IDENTITIES: dyad 2 musician 2 == dyad 9 musician 1.
-% Derive the complete 18-context identity table from the observed records;
-% do not require a separately maintained CSV.
+% VERIFIED COHORT: Dyad 9 excluded, with 8 dyads and 16 distinct musicians.
+assert(~any(R.Dyad==9),'Dyad 9 leaked into statistical validation.');
 contexts=unique(R(:,{'Dyad','Musician'}),'rows');
-assert(height(contexts)==18,'Expected exactly 18 dyad/musician contexts.');
+assert(height(contexts)==16,'Expected exactly 16 musician contexts after Dyad 9 exclusion.');
+assert(numel(unique(contexts.Dyad))==8,'Expected exactly 8 dyads.');
 K=contexts;
 K.Context=strcat(string(K.Dyad),'_',string(K.Musician));
 K.PersonID=strcat("P_D",string(K.Dyad),"_M",string(K.Musician));
-repeatA=K.Context=="2_2"; repeatB=K.Context=="9_1";
-assert(nnz(repeatA)==1 && nnz(repeatB)==1, ...
- 'Expected repeated contexts Dyad 2/Musician 2 and Dyad 9/Musician 1.');
-K.PersonID(repeatA|repeatB)="P_REPEATED_HORN";
-assert(numel(unique(K.PersonID))==17,'Expected exactly 17 unique people.');
+assert(numel(unique(K.PersonID))==16,'Expected exactly 16 independent musicians.');
 writetable(K(:,{'Dyad','Musician','PersonID'}), ...
  fullfile(V,'MUSICIAN_ID_MAP_USED.csv'));
 missingFlag=fullfile(V,'REQUIRES_PERSON_ID_MAPPING.txt');
@@ -8960,8 +8991,8 @@ R.Context=strcat(string(R.Dyad),'_',string(R.Musician));
 [tf,loc]=ismember(R.Context,K.Context);
 assert(all(tf),'Missing musician identity mapping for one or more contexts.');
 R.PersonID=K.PersonID(loc);
-assert(numel(unique(R.PersonID))==17,'Participant count mismatch.');
-stripes=[.15 .18 .20]; taskNames={'Coordination','Call-response','Familiar','Unfamiliar','Improvisation','Listening'};
+assert(numel(unique(R.PersonID))==16,'Participant count mismatch.');
+stripes=.18; taskNames={'Coordination','Call-response','Familiar','Unfamiliar','Improvisation','Listening'};
 T=table();
 rng(260924,'twister'); nBoot=5000;
 for si=1:numel(stripes)
@@ -8972,7 +9003,7 @@ for si=1:numel(stripes)
    'FULL_COHORT_ROBUSTNESS','ALL_EDGES_ALL_GEOMETRIES.csv');
   X=readtable(d2);X.Context=strcat(string(X.Dyad),'_',string(X.Musician));
   [ok,ii]=ismember(X.Context,K.Context);assert(all(ok));X.PersonID=K.PersonID(ii);
-  assert(numel(unique(X.PersonID))==17,'Stripe analysis does not contain all 17 musicians.');
+  assert(numel(unique(X.PersonID))==16,'Stripe analysis does not contain all 16 musicians.');
  end
  X=X(abs(X.WindowSeconds-6.4)<1e-9 & abs(X.Overlap-.50)<1e-12,:);
  assert(~isempty(X),'Missing primary 6.4-second / 50%% geometry');
@@ -9038,8 +9069,8 @@ final_ci_figure(T,V);
 primary_geometry_inference_figure(T,V,M);
 
 fid=fopen(fullfile(V,'STATISTICAL_VALIDATION_README.txt'),'w');
-fprintf(fid,'17 unique musicians; 18 contexts. Repeated: D02_M2 and D09_M1.\n');
-fprintf(fid,'Bootstrap: 5000 musician-cluster resamples per stripe and task.\n');
+fprintf(fid,'Dyad 9 excluded entirely before processing; 8 dyads and 16 independent musicians.\n');
+fprintf(fid,'Bootstrap: 5000 independent-musician resamples per stripe and task.\n');
 fprintf(fid,'PRIMARY 6.4s/50%%: 10000 musician-level sign flips for raw two-sided task p-values; Holm-Bonferroni adjustment across six Rest-referenced tasks.\n');
 fprintf(fid,'All 540 edge/task/geometry tests are exploratory robustness diagnostics, not primary inferential claims.\n');
 fprintf(fid,['Cluster bootstrap CIs are pointwise, not simultaneous.\n', ...
@@ -9049,6 +9080,127 @@ fprintf(fid,'No inferential claims should be made from geometry-level counts alo
 fclose(fid);
 end
 
+
+
+function music2_dyad_cluster_sensitivity(M)
+% Exact dyad-level sign flips; two partners remain one statistical unit.
+% Uses existing recording-level signed CS at the primary geometry only.
+% Dyads with one valid musician contribute that musician's estimate; report N.
+source=fullfile(M,'FULL_COHORT_ROBUSTNESS','ALL_EDGES_ALL_GEOMETRIES.csv');
+assert(isfile(source),'Missing recording-level results: %s',source);
+R=readtable(source);
+required={'Dyad','Musician','Task','Edge','SignedCS','WindowSeconds','Overlap'};
+assert(all(ismember(required,R.Properties.VariableNames)), ...
+ 'Missing required columns in recording-level signed-CS results.');
+R=R(abs(R.WindowSeconds-6.4)<1e-9 & abs(R.Overlap-.50)<1e-12,:);
+assert(~isempty(R) && ~any(R.Dyad==9),'Primary data missing or Dyad 9 present.');
+assert(numel(unique(R.Dyad))==8,'Expected eight retained dyads.');
+assert(height(unique(R(:,{'Dyad','Musician'}),'rows'))==16, ...
+ 'Expected exactly sixteen musician identities.');
+R.Edge=string(R.Edge);
+% First aggregate repeated recordings within musician/task/edge, if present.
+[G,dyad,musician,task,edge]=findgroups(R.Dyad,R.Musician,R.Task,R.Edge);
+cs=splitapply(@(v)mean(v,'omitnan'),R.SignedCS,G);
+A=table(dyad,musician,task,edge,cs,'VariableNames', ...
+ {'Dyad','Musician','Task','Edge','SignedCS'});
+ref=A(A.Task==0,:); active=A(A.Task>=1 & A.Task<=6,:);
+keyRef=strcat(string(ref.Dyad),'|',string(ref.Musician),'|',ref.Edge);
+keyTask=strcat(string(active.Dyad),'|',string(active.Musician),'|',active.Edge);
+[found,ix]=ismember(keyTask,keyRef);
+active=active(found,:);ix=ix(found);
+active.DeltaCS=active.SignedCS-ref.SignedCS(ix);
+% Average the ten available edges within each musician and task.
+[G,dyad,musician,task]=findgroups(active.Dyad,active.Musician,active.Task);
+meanDelta=splitapply(@(v)mean(v,'omitnan'),active.DeltaCS,G);
+people=table(dyad,musician,task,meanDelta,'VariableNames', ...
+ {'Dyad','Musician','Task','MeanDeltaCS'});
+people=people(isfinite(people.MeanDeltaCS),:);
+V=fullfile(M,'UNIFIED_PUBLICATION','STATISTICAL_VALIDATION','DYAD_CLUSTER_SENSITIVITY');
+if ~isfolder(V),mkdir(V);end
+writetable(people,fullfile(V,'MUSICIAN_TASK_NETWORK_DELTA_CS.csv'));
+[G,dyad,task]=findgroups(people.Dyad,people.Task);
+delta=splitapply(@mean,people.MeanDeltaCS,G);
+nMusicians=splitapply(@numel,people.MeanDeltaCS,G);
+dyads=table(dyad,task,delta,nMusicians,'VariableNames', ...
+ {'Dyad','Task','DyadMeanDeltaCS','NMusicians'});
+writetable(dyads,fullfile(V,'DYAD_TASK_NETWORK_DELTA_CS.csv'));
+nBoot=10000; rng(261119,'twister');
+labels={'Coordination','Call-response','Familiar','Unfamiliar','Improvisation','Listening'};
+raw=nan(6,1); estimate=nan(6,1);lo=nan(6,1);hi=nan(6,1);
+nDyads=zeros(6,1);nPeople=zeros(6,1);minP=nan(6,1);
+for t=1:6
+ z=dyads(dyads.Task==t,:);x=z.DyadMeanDeltaCS;
+ x=x(isfinite(x));n=numel(x);nDyads(t)=n;
+ nPeople(t)=sum(z.NMusicians(isfinite(z.DyadMeanDeltaCS)));
+ if n<2,continue;end
+ estimate(t)=mean(x);
+ % Exact two-sided studentized sign-flip distribution, 2^n configurations.
+ obs=music2_dyad_tstat(x);N=2^n;null=zeros(N,1);
+ for k=0:N-1
+  flips=2*double(bitget(uint32(k),1:n))'-1;
+  null(k+1)=music2_dyad_tstat(x.*flips);
+ end
+ raw(t)=sum(abs(null)>=abs(obs)-1e-12)/N;
+ minP(t)=2/N;
+ boots=nan(nBoot,1);
+ for b=1:nBoot,boots(b)=mean(x(randi(n,n,1)));end
+ ci=prctile(boots,[2.5 97.5]);lo(t)=ci(1);hi(t)=ci(2);
+ fprintf('Dyad sensitivity %d/6 (%s): %d dyads, exact %d flips, p=%.5g\n', ...
+  t,labels{t},n,N,raw(t));
+end
+holm=final_holm(raw);
+T=table((1:6)',string(labels)',nDyads,nPeople,estimate,lo,hi,raw,holm,holm<.05,minP, ...
+ 'VariableNames',{'Task','TaskLabel','NDyads','NMusicians','MeanDyadDeltaCS', ...
+ 'CI_Low','CI_High','ExactSignFlipP','HolmFWERP','SignificantHolm05','MinimumTwoSidedP'});
+writetable(T,fullfile(V,'DYAD_CLUSTERED_SIX_TASK_RESULTS.csv'));
+primary=fullfile(M,'UNIFIED_PUBLICATION','STATISTICAL_VALIDATION', ...
+ 'PRIMARY_6p4s_50pct_COMPLETE_PRIMARY_RESULTS.csv');
+if isfile(primary)
+ U=readtable(primary);
+ if ismember('Task',U.Properties.VariableNames)
+  U=U(:,intersect({'Task','TaskLabel','NPeople','MeanDeltaCS','CI_Low','CI_High', ...
+   'RawPermutationP','HolmFWERP'},U.Properties.VariableNames,'stable'));
+  U.Properties.VariableNames=strcat('Musician_',U.Properties.VariableNames);
+  U.Task=(1:height(U))'; % task key is supplied by the dyad table
+  T=outerjoin(T,U,'Keys','Task','MergeKeys',true,'Type','left');
+  writetable(T,fullfile(V,'MUSICIAN_VS_DYAD_INFERENCE_COMPARISON.csv'));
+ end
+end
+f=figure('Visible','off','Color','w','Position',[100 100 1200 680]);
+ax=axes(f,'Position',[.22 .16 .71 .75]);hold(ax,'on');
+for t=1:6
+ if isfinite(estimate(t))
+  plot(ax,[lo(t),hi(t)],[t,t],'k-','LineWidth',2);
+  plot(ax,estimate(t),t,'ko','MarkerFaceColor','k','MarkerSize',8);
+ end
+end
+xline(ax,0,'k:');set(ax,'YTick',1:6,'YTickLabel',labels,'YDir','reverse', ...
+ 'FontName','Arial','FontSize',14);xlabel(ax,'Dyad-mean signed task-minus-Rest Delta CS');
+title(ax,'Eight-dyad sensitivity: cluster bootstrap 95% intervals');
+exportgraphics(f,fullfile(V,'DYAD_CLUSTERED_SIX_TASK_CI.pdf'),'ContentType','vector');
+exportgraphics(f,fullfile(V,'DYAD_CLUSTERED_SIX_TASK_CI.jpg'),'Resolution',600);
+savefig(f,fullfile(V,'DYAD_CLUSTERED_SIX_TASK_CI.fig'));close(f);
+fid=fopen(fullfile(V,'README_DYAD_CLUSTERED_INFERENCE.txt'),'w');
+fprintf(fid,'Primary geometry 6.4 s, 50%% overlap, stripe width 0.18. Dyad 9 excluded.\n');
+fprintf(fid,'Each musician: mean of available signed task-minus-Rest edge changes.\n');
+fprintf(fid,'Each dyad: mean of available partner musician effects, equal dyad weighting.\n');
+fprintf(fid,'Exact two-sided studentized sign-flip tests enumerate all 2^NDyads sign patterns.\n');
+fprintf(fid,'Holm-Bonferroni adjusts six task-level p-values.\n');
+fprintf(fid,'Dyad bootstrap: 10000 resamples of dyad means; pointwise percentile 95%% CIs.\n');
+fprintf(fid,'Bootstrap intervals with only eight clusters have uncertain finite-sample coverage.\n');
+fprintf(fid,'Tasks with one missing partner are reported with NMusicians and NDyads.\n');
+fprintf(fid,'This is a sensitivity analysis, not independent replication or a new MDEA run.\n');
+fclose(fid);
+end
+
+function t=music2_dyad_tstat(x)
+x=x(isfinite(x));
+if numel(x)<2,t=NaN;return;end
+sd=std(x);
+if sd<eps
+ if abs(mean(x))<eps,t=0;else,t=sign(mean(x))*Inf;end
+else,t=mean(x)/(sd/sqrt(numel(x)));end
+end
 
 function primary_geometry_inference_figure(T,V,M)
 % PRIMARY inferential display: six musician-cluster task means at 6.4 s/50%.
